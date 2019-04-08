@@ -10,8 +10,11 @@
 
 #include <WiFi.h>
 #include <PubSubClient.h>
+// I need to update json to 6
 #include <ArduinoJson.h>
+#include <Scheduler.h>
 
+const char* device_code = "MBBSBG";
 // Wifi settings
 const char* ssid = "";
 const char* password =  "";
@@ -22,9 +25,13 @@ const char* mqtt_server = "";
 // #define MQTT_PASSWORD "password"
 // #define MQTT_SERIAL_PUBLISH_CH
 #define MQTT_SERIAL_RECEIVER_CH "/pomelo/water/DDKCIZ"
+#define MQTT_SERIAL_HEARTBEAT_CH "/pomelo/server/heartbeat"
 // IO pins
 const int LED_BUILTIN = 2;
 const int SPRINKLE_PUMP = 4;
+// Create scheduler
+Scheduler scheduler = Scheduler();
+bool heartbeat_scheduled = false;
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -113,6 +120,32 @@ void mqttCallback(char* topic, byte *payload, unsigned int payload_length) {
   return;
 }
 
+void send_heartbeat() {
+  const int capacity=JSON_OBJECT_SIZE(4);
+  StaticJsonBuffer<capacity> json_buffer;
+  JsonObject& doc = json_buffer.createObject();
+  
+  doc["type"] = "heartbeat";
+  doc["device"] = device_code;
+  doc["code"] = (char*)0;
+
+  // output buffer
+  char output[128];
+  doc.printTo(output, sizeof(output));
+
+  // Send mqtt message
+  Serial.println("Sending heartbeat");
+  mqttClient.publish(MQTT_SERIAL_HEARTBEAT_CH, output);
+  heartbeat_scheduled = false;
+}
+
+void schedule_heartbeat() {
+  if (heartbeat_scheduled==false) {
+    scheduler.schedule(send_heartbeat, 240000); // four minutes
+    heartbeat_scheduled = true;
+  }
+}
+
 void setup() {
   // --- Configurations ---
   // Serial
@@ -130,6 +163,7 @@ void setup() {
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
+  scheduler.update();
+  schedule_heartbeat();
   mqttClient.loop();
 }
