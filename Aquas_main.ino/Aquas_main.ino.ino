@@ -12,27 +12,22 @@
 #include <PubSubClient.h>
 // I need to update json to 6
 #include <ArduinoJson.h>
-#include <Scheduler.h>
+// #include <Scheduler.h>
+// Aquas libraries
+#include "AquasConstants.h"
 
-const char* device_code = "MBBSBG";
-// Wifi settings
-const char* ssid = "";
-const char* password =  "";
-// MQTT settings
-const char* mqtt_server = "";
-#define mqtt_port 1883
-// #define MQTT_USER "username"
-// #define MQTT_PASSWORD "password"
-// #define MQTT_SERIAL_PUBLISH_CH
-#define MQTT_SERIAL_RECEIVER_CH "/pomelo/water/DDKCIZ"
-#define MQTT_SERIAL_HEARTBEAT_CH "/pomelo/server/heartbeat"
-// IO pins
 const int LED_BUILTIN = 2;
 const int SPRINKLE_PUMP = 4;
-// Create scheduler
-Scheduler scheduler = Scheduler();
-bool heartbeat_scheduled = false;
 
+// Create scheduler
+// Scheduler scheduler = Scheduler();
+bool heartbeat_scheduled = false;
+int heartbeat_time = 0;
+const int max_heartbeat_time = 5000000;   // 3 min aproximately. Might change with more code added
+// mqtt
+long lastReconnectAttempt = 0;
+
+AquasConstants constants = AquasConstants();
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
@@ -49,7 +44,7 @@ void blink(int delay_time, int times) {
 // Connect to the Wifi network.
 void connect_to_wifi() {
 
-  WiFi.begin(ssid, password);
+  WiFi.begin(constants.ssid, constants.password);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -62,7 +57,7 @@ void connect_to_wifi() {
 }
 
 // Connect to the MQTT broker
-void mqtt_reconnect() {
+void mqtt_connect() {
   Serial.println("try to connect to mqtt");
   while (!mqttClient.connected()) {
     // Mqtt clientID must be random
@@ -80,6 +75,17 @@ void mqtt_reconnect() {
   }
 }
 
+//void mqtt_attempt_reconnect() {
+//      long now = millis();
+//    if (now - lastReconnectAttempt > 5000) {
+//      lastReconnectAttempt = now;
+//      // Attempt to reconnect
+//      if (reconnect()) {
+//        lastReconnectAttempt = 0;
+//      }
+//    }
+//}
+
 void runSprinkle(int sprinkle_milli) {
     digitalWrite(SPRINKLE_PUMP, HIGH);
     delay(sprinkle_milli);
@@ -89,10 +95,13 @@ void runSprinkle(int sprinkle_milli) {
 void runActuator(JsonVariant event) {
   const char* actuator = event["actuator"].as<char*>();
   const char* action = event["action"].as<char*>();
+  int sprinkleTime = 10000;
   if(strcmp(actuator, "sprinkle") == 0) {
       if (strcmp(action, "now") == 0) {
-        runSprinkle(3000);
+        sprinkleTime = 3000;
       }
+      runSprinkle(sprinkleTime);
+      send_sprinkle_response(event);
   } else {
       Serial.print("Reived an unknown command ");
       Serial.println(actuator);
@@ -121,29 +130,62 @@ void mqttCallback(char* topic, byte *payload, unsigned int payload_length) {
 }
 
 void send_heartbeat() {
-  const int capacity=JSON_OBJECT_SIZE(4);
+  const int capacity=300;
   StaticJsonBuffer<capacity> json_buffer;
   JsonObject& doc = json_buffer.createObject();
   
   doc["type"] = "heartbeat";
-  doc["device"] = device_code;
-  doc["code"] = (char*)0;
+  doc["device"] = constants.device_code;
+  doc["code"] = (char*)0;  // Null
+
+  // output buffer
+  // char output[300];
+  // doc.printTo(output, sizeof(output));
+  String outputStr;
+  doc.printTo(outputStr);
+  Serial.println(outputStr);
+  char* outputChr = strdup(outputStr.c_str());
+
+  // Send mqtt message
+  Serial.println("Sending heartbeat");
+  mqttClient.publish(MQTT_SERIAL_HEARTBEAT_CH, outputChr);
+  Serial.println("Heartbeat sent");
+  heartbeat_scheduled = false;
+  // scheduler.schedule(send_heartbeat, 240000);
+  heartbeat_time=0;
+  free(outputChr);
+}
+
+void send_sprinkle_response(JsonVariant event) {
+  Serial.println("Sending sprinkle response");
+  const int capacity=250;
+  StaticJsonBuffer<capacity> json_buffer;
+  JsonObject& doc = json_buffer.createObject();
+  
+  doc["action"] = event["action"].as<char*>();
+  doc["device"] = constants.device_code;
+  doc["code"] = event["code"].as<char*>();
 
   // output buffer
   char output[128];
   doc.printTo(output, sizeof(output));
 
   // Send mqtt message
-  Serial.println("Sending heartbeat");
-  mqttClient.publish(MQTT_SERIAL_HEARTBEAT_CH, output);
-  heartbeat_scheduled = false;
+  mqttClient.publish(MQTT_SERIAL_SPRINKLE_CH, output);
+  
+  Serial.println("Sprinkle response sent");
 }
 
 void schedule_heartbeat() {
-  if (heartbeat_scheduled==false) {
-    scheduler.schedule(send_heartbeat, 240000); // four minutes
-    heartbeat_scheduled = true;
+  // if (heartbeat_scheduled==false) {
+  // Using the `millis = now();` method might help to improve time accuracy
+  if (heartbeat_time >= max_heartbeat_time) {
+    send_heartbeat();
+    // scheduler.schedule(send_heartbeat, 240000); // four minutes
+    Serial.println("Heartbeat scheduled");
+    // heartbeat_scheduled = true;
   }
+  heartbeat_time++;
 }
 
 void setup() {
@@ -156,14 +198,20 @@ void setup() {
   // Wifi
   connect_to_wifi();
   // Mqtt
-  mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setServer(constants.mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
-  mqtt_reconnect();
+  mqtt_connect();
   runSprinkle(1000);
 }
 
 void loop() {
-  scheduler.update();
+  // scheduler.update();
+  if (!mqttClient.connected()) {
+    Serial.println("Mqtt disconnected");
+    // mqtt_attempt_reconnect();
+    mqtt_connect();
+  } else {
+    mqttClient.loop();
+  }
   schedule_heartbeat();
-  mqttClient.loop();
 }
