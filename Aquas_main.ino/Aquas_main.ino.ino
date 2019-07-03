@@ -12,7 +12,6 @@
 #include <PubSubClient.h>
 // I need to update json to 6
 #include <ArduinoJson.h>
-// #include <Scheduler.h>
 // Aquas libraries
 #include "AquasConstants.h"
 
@@ -20,7 +19,6 @@ const int LED_BUILTIN = 2;
 const int SPRINKLE_PUMP = 4;
 
 // Create scheduler
-// Scheduler scheduler = Scheduler();
 bool heartbeat_scheduled = false;
 int heartbeat_time = 0;
 const int max_heartbeat_time = 5000000;   // 3 min aproximately. Might change with more code added
@@ -74,17 +72,6 @@ void mqtt_connect() {
     }
   }
 }
-
-//void mqtt_attempt_reconnect() {
-//      long now = millis();
-//    if (now - lastReconnectAttempt > 5000) {
-//      lastReconnectAttempt = now;
-//      // Attempt to reconnect
-//      if (reconnect()) {
-//        lastReconnectAttempt = 0;
-//      }
-//    }
-//}
 
 void runSprinkle(int sprinkle_milli) {
     digitalWrite(SPRINKLE_PUMP, HIGH);
@@ -143,7 +130,6 @@ void send_heartbeat() {
   // doc.printTo(output, sizeof(output));
   String outputStr;
   doc.printTo(outputStr);
-  Serial.println(outputStr);
   char* outputChr = strdup(outputStr.c_str());
 
   // Send mqtt message
@@ -151,7 +137,6 @@ void send_heartbeat() {
   mqttClient.publish(MQTT_SERIAL_HEARTBEAT_CH, outputChr);
   Serial.println("Heartbeat sent");
   heartbeat_scheduled = false;
-  // scheduler.schedule(send_heartbeat, 240000);
   heartbeat_time=0;
   free(outputChr);
 }
@@ -177,13 +162,10 @@ void send_sprinkle_response(JsonVariant event) {
 }
 
 void schedule_heartbeat() {
-  // if (heartbeat_scheduled==false) {
   // Using the `millis = now();` method might help to improve time accuracy
   if (heartbeat_time >= max_heartbeat_time) {
     send_heartbeat();
-    // scheduler.schedule(send_heartbeat, 240000); // four minutes
     Serial.println("Heartbeat scheduled");
-    // heartbeat_scheduled = true;
   }
   heartbeat_time++;
 }
@@ -205,10 +187,8 @@ void setup() {
 }
 
 void loop() {
-  // scheduler.update();
   if (!mqttClient.connected()) {
     Serial.println("Mqtt disconnected");
-    // mqtt_attempt_reconnect();
     mqtt_connect();
   } else {
     mqttClient.loop();
