@@ -116,6 +116,28 @@ void mqttCallback(char* topic, byte *payload, unsigned int payload_length) {
   return;
 }
 
+void send_boot_message() {
+  const int capacity=300;
+  StaticJsonBuffer<capacity> json_buffer;
+  JsonObject& doc = json_buffer.createObject();
+  
+  doc["type"] = "device_on";
+  doc["device"] = constants.device_code;
+  doc["code"] = (char*)0;  // Null
+
+  String outputStr;
+  doc.printTo(outputStr);
+  char* outputChr = strdup(outputStr.c_str());
+
+  // Send mqtt message
+  Serial.println("Sending boot");
+  mqttClient.publish(MQTT_SERIAL_HEARTBEAT_CH, outputChr);
+  Serial.println("Boot sent");
+  heartbeat_scheduled = false;
+  heartbeat_time=0;
+  free(outputChr);
+}
+
 void send_heartbeat() {
   const int capacity=300;
   StaticJsonBuffer<capacity> json_buffer;
@@ -183,6 +205,7 @@ void setup() {
   mqttClient.setServer(constants.mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
   mqtt_connect();
+  send_boot_message();
   runSprinkle(1000);
 }
 
