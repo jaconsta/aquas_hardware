@@ -1,4 +1,3 @@
-
 /**
    Pomelo device connection.
 
@@ -19,11 +18,8 @@ const int LED_BUILTIN = 2;
 const int SPRINKLE_PUMP = 4;
 
 // Create scheduler
-bool heartbeat_scheduled = false;
-int heartbeat_time = 0;
-const int max_heartbeat_time = 5000000;   // 3 min aproximately. Might change with more code added
-// mqtt
-long lastReconnectAttempt = 0;
+unsigned long heartbeat_time_start = 0;
+unsigned long max_heartbeat_time_millis = 300000; // 5 min
 
 AquasConstants constants = AquasConstants();
 WiFiClient wifiClient;
@@ -63,10 +59,10 @@ void mqtt_connect() {
     clientId += String(random(0xffff), HEX);
     // Connect
     if (mqttClient.connect(clientId.c_str(), "", "")) {
-      Serial.print("MQTT connected");
+      Serial.println("MQTT connected");
       mqttClient.subscribe(MQTT_SERIAL_RECEIVER_CH);
     } else {
-      Serial.print("MQTT connection failed");
+      Serial.println("MQTT connection failed");
       Serial.println(mqttClient.state());
       delay(500);
     }
@@ -133,8 +129,6 @@ void send_boot_message() {
   Serial.println("Sending boot");
   mqttClient.publish(MQTT_SERIAL_HEARTBEAT_CH, outputChr);
   Serial.println("Boot sent");
-  heartbeat_scheduled = false;
-  heartbeat_time=0;
   free(outputChr);
 }
 
@@ -158,8 +152,6 @@ void send_heartbeat() {
   Serial.println("Sending heartbeat");
   mqttClient.publish(MQTT_SERIAL_HEARTBEAT_CH, outputChr);
   Serial.println("Heartbeat sent");
-  heartbeat_scheduled = false;
-  heartbeat_time=0;
   free(outputChr);
 }
 
@@ -184,12 +176,13 @@ void send_sprinkle_response(JsonVariant event) {
 }
 
 void schedule_heartbeat() {
-  // Using the `millis = now();` method might help to improve time accuracy
-  if (heartbeat_time >= max_heartbeat_time) {
+  unsigned long now = millis();
+  unsigned long diff = now - heartbeat_time_start;
+  if (abs(diff) > max_heartbeat_time_millis) {
     send_heartbeat();
     Serial.println("Heartbeat scheduled");
+    heartbeat_time_start = now;
   }
-  heartbeat_time++;
 }
 
 void setup() {
