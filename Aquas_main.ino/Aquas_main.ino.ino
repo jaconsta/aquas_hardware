@@ -20,6 +20,18 @@ const int SPRINKLE_PUMP = 4;
 // Create scheduler
 unsigned long heartbeat_time_start = 0;
 unsigned long max_heartbeat_time_millis = 300000; // 5 min
+// Sprinkle scheduler
+bool should_run_sprinkle = false;
+bool should_send_sprinkle_response = false;
+unsigned long sprinkle_response_time_start = 0;
+unsigned long max_sprinkle_response_time_millis = 10000; // 10 sec
+
+struct SprinkleEvents {
+  char actuator[50];
+  char action[50];
+  char code[50];
+};
+struct SprinkleEvents sprinkle_event;
 
 AquasConstants constants = AquasConstants();
 WiFiClient wifiClient;
@@ -69,22 +81,46 @@ void mqtt_connect() {
   }
 }
 
-void runSprinkle(int sprinkle_milli) {
+void sprinkle_controller() {
+  if (should_run_sprinkle) {
+    unsigned long now = millis();
+    unsigned long diff = now - sprinkle_response_time_start;
+    if (abs(diff) > max_sprinkle_response_time_millis) {
+      digitalWrite(SPRINKLE_PUMP, LOW);
+      should_run_sprinkle = false;
+      if(should_send_sprinkle_response) {
+        send_sprinkle_response();
+        should_send_sprinkle_response = false;
+      }
+    }
+  }
+}
+
+void runSprinkle(int sprinkle_millis) {
+    // Trigger the pump
     digitalWrite(SPRINKLE_PUMP, HIGH);
-    delay(sprinkle_milli);
-    digitalWrite(SPRINKLE_PUMP, LOW);
+    // Setup the async response
+    should_run_sprinkle = true;
+    sprinkle_response_time_start = millis();  // now
+    max_sprinkle_response_time_millis = sprinkle_millis;
 }
 
 void runActuator(JsonVariant event) {
   const char* actuator = event["actuator"].as<char*>();
   const char* action = event["action"].as<char*>();
+  const char* code = event["code"].as<char*>();
   int sprinkleTime = 10000;
   if(strcmp(actuator, "sprinkle") == 0) {
-      if (strcmp(action, "now") == 0) {
-        sprinkleTime = 3000;
-      }
-      runSprinkle(sprinkleTime);
-      send_sprinkle_response(event);
+    if (strcmp(action, "now") == 0) {
+      sprinkleTime = 3000;
+    }
+    runSprinkle(sprinkleTime);
+    should_send_sprinkle_response = true;
+    *stpcpy(sprinkle_event.actuator, actuator);
+    *stpcpy(sprinkle_event.action, action);
+    if (code != NULL) {
+      *stpcpy(sprinkle_event.code, code);
+    }
   } else {
       Serial.print("Reived an unknown command ");
       Serial.println(actuator);
@@ -108,8 +144,13 @@ void mqttCallback(char* topic, byte *payload, unsigned int payload_length) {
   for(int i=0; i<actions.size(); i++){
     runActuator(actions[i]);
   }
-  Serial.println("finished");
   return;
+}
+
+void clean_sprinkle_event() {
+  *stpcpy(sprinkle_event.actuator, "");
+  *stpcpy(sprinkle_event.action, "");
+  *stpcpy(sprinkle_event.code, "");
 }
 
 void send_boot_message() {
@@ -155,15 +196,16 @@ void send_heartbeat() {
   free(outputChr);
 }
 
-void send_sprinkle_response(JsonVariant event) {
+void send_sprinkle_response() { // (JsonVariant event) {
   Serial.println("Sending sprinkle response");
   const int capacity=250;
   StaticJsonBuffer<capacity> json_buffer;
   JsonObject& doc = json_buffer.createObject();
+
   
-  doc["action"] = event["action"].as<char*>();
+  doc["action"] = sprinkle_event.action;
   doc["device"] = constants.device_code;
-  doc["code"] = event["code"].as<char*>();
+  doc["code"] = sprinkle_event.code;
 
   // output buffer
   char output[128];
@@ -171,7 +213,7 @@ void send_sprinkle_response(JsonVariant event) {
 
   // Send mqtt message
   mqttClient.publish(MQTT_SERIAL_SPRINKLE_CH, output);
-  
+  clean_sprinkle_event();
   Serial.println("Sprinkle response sent");
 }
 
@@ -210,4 +252,5 @@ void loop() {
     mqttClient.loop();
   }
   schedule_heartbeat();
+  sprinkle_controller();
 }
